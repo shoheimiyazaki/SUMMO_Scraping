@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# #  SUMMOスクレイピングメイン
+
 # In[1]:
 
 
@@ -15,7 +17,61 @@ from urllib.parse import urljoin
 # In[2]:
 
 
-def ParseRoomDetail(EstateElem):
+def Recursive_PageNum(All_PageFullURLs, url):
+    #データ取得
+    result = requests.get(url)
+    c = result.content
+    #HTMLを元に、オブジェクトを作る
+    soup = BeautifulSoup(c, "html.parser")
+    #ページ数を取得
+    body = soup.find("body")
+    pages = body.find("div",{'class':'pagination pagination_set-nav'}) #Page数の部分のhtmlを抜き出す
+    links = pages.select("a[href]") #link付きaタグを抜き出す
+    #ページ選択で数値になっているリンクを引っ張ってくる（"次へ"を除く）
+    PageURLs = [link.get("href") for link in links if link.get_text().isdigit()]
+    PageFullURLs = [urljoin("https://suumo.jp/", relative) for relative in PageURLs] #相対パス -> 絶対パス
+    #1ページ目を先頭に格納
+    PageFullURLs.insert(0, url)
+    PageFullURLs = list(dict.fromkeys(PageFullURLs)) #重複削除
+    nPages = [int(link.get_text()) for link in links if link.get_text().isdigit()]
+    All_PageFullURLs.extend(PageFullURLs)
+    All_PageFullURLs = list(dict.fromkeys(All_PageFullURLs)) #重複削除
+    #再帰関数Exit条件 1 pageしかない場合 / 2 pageしかない場合 / MaxとMax-1番目のページ数の差が1の場合
+    if len(nPages) == 0 or len(nPages) == 1 or (sorted(nPages)[-1] - sorted(nPages)[-2]) ==1:
+        print("Exit recursive loop! # of URLs are    " + str(len(All_PageFullURLs)))
+        time.sleep(5)
+        return All_PageFullURLs
+    #再帰関数 ページ数が２番目に大きいURLを次の読み込みURLに指定
+    time.sleep(5)
+    return Recursive_PageNum(All_PageFullURLs, PageFullURLs[-2])
+
+def PageNum_Easy(url):
+    #データ取得
+    result = requests.get(url)
+    c = result.content
+    #HTMLを元に、オブジェクトを作る
+    soup = BeautifulSoup(c, "html.parser")
+    #ページ数を取得
+    body = soup.find("body")
+    pages = body.find("div",{'class':'pagination pagination_set-nav'}) #Page数の部分のhtmlを抜き出す
+    links = pages.select("a[href]") #link付きaタグを抜き出す
+    #ページ選択で数値になっているものを引っ張ってくる（"次へ"を除く / 1のみの場合は空リスト）
+    nPages = [int(link.get_text()) for link in links if link.get_text().isdigit()]
+    if len(nPages) == 0:
+        PageFullURLs = [url]
+    else:
+        MaxPages = sorted(nPages)[-1] #Max page数
+        PageFullURLs = []
+        for ipg in range(MaxPages):
+            base_URL = url + '&page=' + str(ipg+1)
+            PageFullURLs.append(base_URL)
+    return PageFullURLs
+
+
+# In[3]:
+
+
+def ParseRoomDetail(EstateElem, url):
     #マンション名取得
     EstateName = EstateElem.find("div",{'class':'cassetteitem_content-title'}).get_text()
     #住所取得
@@ -29,125 +85,99 @@ def ParseRoomDetail(EstateElem):
     EstageAge = EstateCol3Elem[0].get_text()
     EstageHight = EstateCol3Elem[1].get_text()
     #Header Info をListに
-    HeaderInfo = [EstateName, EstateAddress, EstateLocation, EstageAge, EstageHight]
+    HeaderInfo = [EstateName, EstateAddress, EstateLocation, EstageAge, EstageHight, url]
     #階、賃料、管理費、敷/礼/保証/敷引,償却、間取り、専有面積が入っているtableを全て抜き出し
     RoomtableElem =  EstateElem.find("table",{'class':'cassetteitem_other'})
     RoomDetail = []
-    #Contents 
+    #Contents
     for rooms in RoomtableElem.find_all("tbody"):
         Roomtable = [temp.get_text() for temp in rooms.findAll('td')]
         if "cassetteitem_other-checkbox--newarrival" in rooms.td['class']:
             Roomtable.append("New")
         else:
             Roomtable.append("Exsiting")
+        Roomlinks = EstateElem.select("a[href]") #link付きaタグを抜き出す
+        #"詳細を見る"の表示になっているリンクを引っ張ってくる
+        RoomDetailURL = [link.get("href") for link in Roomlinks if link.get_text() == "詳細を見る"][0]
+        RoomFullDetailURL = urljoin("https://suumo.jp/", RoomDetailURL) #相対パス -> 絶対パス
+        Roomtable.append(RoomFullDetailURL)
         #Add Header Info
         Roomtable.extend(HeaderInfo)
         RoomDetail.append(Roomtable)
     return RoomDetail
 
 
-# In[3]:
+# In[4]:
 
 
 def Parsedistrict(PageFullURLs, RoomDetails):
     for icount, url in enumerate(PageFullURLs):
         print("    Room Detail Status: " + str(icount + 1) + "/" + str(len(PageFullURLs)))
-        #データ取得
-        result = requests.get(url)
-        c = result.content
-        #HTMLを元に、オブジェクトを作る
-        soup = BeautifulSoup(c, "html.parser")
-        #物件リストの部分を切り出し
-        summary = soup.find("div",{'id':'js-bukkenList'})
-        #マンション名、住所、立地（最寄駅/徒歩~分）、築年数、建物高さが入っているcassetteitemを全て抜き出し - デフォルト設定で最大30件の物件表示
-        cassetteitems = summary.find_all("div",{'class':'cassetteitem'})
-        #マンションの数でループ
-        for EstateElem in cassetteitems:
-            RoomDetails.extend(ParseRoomDetail(EstateElem))
-        time.sleep(10)
+        try:
+            #データ取得
+            result = requests.get(url)
+            c = result.content
+            #HTMLを元に、オブジェクトを作る
+            soup = BeautifulSoup(c, "html.parser")
+            #物件リストの部分を切り出し
+            summary = soup.find("div",{'id':'js-bukkenList'})
+            #マンション名、住所、立地（最寄駅/徒歩~分）、築年数、建物高さが入っているcassetteitemを全て抜き出し - デフォルト設定で最大30件の物件表示
+            cassetteitems = summary.find_all("div",{'class':'cassetteitem'})
+            #マンションの数でループ
+            for EstateElem in cassetteitems:
+                RoomDetails.extend(ParseRoomDetail(EstateElem, url))
+        except requests.exceptions.RequestException as e:
+            print("エラー : ",e)
+        time.sleep(5)
     print("total # of Rooms: " + str(len(RoomDetails)))
     return RoomDetails
 
 
-# In[12]:
+# In[5]:
 
 
-#URL（賃貸住宅情報 検索結果の1ページ目） #12万円以下 15分以内 15年以内 2階以上／室内洗濯機置場／バス・トイレ別 管理費・共益費込み 鉄筋系／鉄骨系／ブロック・その他
-BaseURLs = []
-for i in range(23):
-    BaseURLs.append("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=131" + str(i+1).zfill(2) + "&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1")
-BaseURLs
+#検索１ページ目
+#ta=が都道府県コード
+#sc=を無くせば都道府県単位の情報になる
+#東京23区はsc=13101 ~ 13123
+#条件：　12万円以下 15分以内 15年以内 2階以上／室内洗濯機置場／バス・トイレ別 管理費・共益費込み 鉄筋系／鉄骨系／ブロック・その他
+BaseURLs = [
+    #東京都
+    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=13",
+    #神奈川県
+    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=14",
+    #千葉県
+    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=12",
+    #埼玉県
+    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=11"
+]
 
 
-# In[13]:
-
-
-RoomDetails = []
-for iMcount, url in enumerate(BaseURLs):
-    print("District Status: " + str(iMcount + 1) + "/" + str(len(BaseURLs)))
-    #データ取得
-    result = requests.get(url)
-    c = result.content
-    #HTMLを元に、オブジェクトを作る
-    soup = BeautifulSoup(c, "html.parser")
-    #ページ数を取得
-    body = soup.find("body")
-    pages = body.find("div",{'class':'pagination pagination_set-nav'}) #Page数の部分のhtmlを抜き出す
-    links = pages.select("a[href]") #link付きaタグを抜き出す
-    #ページ選択で数値になっているリンクを引っ張ってくる（"次へ"を除く）
-    PageURLs = [link.get("href") for link in links if link.get_text().isdigit()] 
-    #1ページ目を先頭に格納
-    PageURLs.insert(0, url)
-    PageFullURLs = [urljoin("https://suumo.jp/", relative) for relative in PageURLs] #相対パス -> 絶対パス
-    PageFullURLs = list(dict.fromkeys(PageFullURLs)) #重複削除
-    RoomDetails = Parsedistrict(PageFullURLs, RoomDetails)
-
-
-# In[14]:
-
+# In[6]:
 
 #Header Name
+soup = BeautifulSoup(requests.get(BaseURLs[0]).content, "html.parser")
+body = soup.find("body")
 RoomtableHeadElem =  body.find("div",{'class':'cassetteitem'}).find("thead").find_all("th")
 HeaderNames = [temp.get_text() for temp in RoomtableHeadElem]
 HeaderNames.append("NewArrival")
-HeaderNames.extend(["マンション名", "住所", "最寄り駅", "築年数", "建物高さ"])
+HeaderNames.append("RoomDetailLink")
+HeaderNames.extend(["マンション名", "住所", "最寄り駅", "築年数", "建物高さ","SearchURL"])
 HeaderNames = [temp.replace("\xa0", str(i)) for i, temp in enumerate(HeaderNames)] #空白の場合行番号で置き換え
 
 
-# In[15]:
+# In[7]:
 
 
-df = pd.DataFrame(RoomDetails, columns = HeaderNames)
-filename = "SUMMO_Room.csv"
-df.to_csv(filename)
-
-BaseURLs = [
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13101&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #千代田区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13102&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #中央区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13103&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #港区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13104&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #新宿区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13105&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #文京区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13113&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #渋谷区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13106&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #台東区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13107&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #墨田区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13108&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #江東区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13118&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #荒川区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13121&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #足立区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13122&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1", #葛飾区
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&ta=13&sc=13123&cb=0.0&ct=12.0&co=1&et=15&cn=15&mb=0&mt=9999999&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&fw2=&srch_navi=1" #江戸川区
-]
-
-
-BaseURLs = [
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-    "", #
-]
+#Scraping Main
+# RoomDetails = []　　#BaseURLsのデータをまとまりで出したい場合
+for iMcount, url in enumerate(BaseURLs):
+    print("District Status: " + str(iMcount + 1) + "/" + str(len(BaseURLs)))
+    All_PageFullURLs = []
+#     All_PageFullURLs = Recursive_PageNum(All_PageFullURLs, url) #全てのページのURLを取得
+    All_PageFullURLs = PageNum_Easy(url)
+    RoomDetails = [] #データをBaseURLsごと出力
+    RoomDetails = Parsedistrict(All_PageFullURLs, RoomDetails) #ページごとの物件情報取得 / Pageのループはこの中
+    df = pd.DataFrame(RoomDetails, columns = HeaderNames)
+    filename = "SUMMO_FullRoom_" + str(iMcount) + ".csv"
+    df.to_csv(filename)
