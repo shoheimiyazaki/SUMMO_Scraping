@@ -67,6 +67,8 @@ def PageNum_Easy(url):
             PageFullURLs.append(base_URL)
     return PageFullURLs
 
+def remove_newlines(text):
+    return text.replace('\n', '').replace('\r', '').replace('\t', ''). replace('\xa0','')
 
 # In[3]:
 
@@ -104,15 +106,27 @@ def ParseRoomDetail(EstateElem, url):
         #Add Header Info
         Roomtable.extend(HeaderInfo)
         RoomDetail.append(Roomtable)
-    return RoomDetail
+    clearnedList = [[remove_newlines(item) for item in sublist] for sublist in RoomDetail]
+
+    return clearnedList
 
 
 # In[4]:
 
 
 def Parsedistrict(PageFullURLs, RoomDetails):
+    debugCount = 0
     for icount, url in enumerate(PageFullURLs):
-        print("    Room Detail Status: " + str(icount + 1) + "/" + str(len(PageFullURLs)))
+        debugCount = debugCount+1
+        if debugCount>1:
+            break
+        estimatedTimeLeft = len(PageFullURLs)* 5
+        #sec = estimatedTimeLeft %60
+        #min = ((estimatedTimeLeft - sec)/60 ) %60
+        #h = (estimatedTimeLeft - sec - min*60) / 3600
+        #estimatedTime = str(h) +"h" + str(min)+"m" + str(sec)+"s"
+        estimatedTime = str(estimatedTimeLeft / 60) + "min"
+        print("    Room Detail Status: " + str(icount + 1) + "/" + str(len(PageFullURLs)) + " Time left: "+ estimatedTime)
         try:
             #データ取得
             result = requests.get(url)
@@ -129,6 +143,7 @@ def Parsedistrict(PageFullURLs, RoomDetails):
         except requests.exceptions.RequestException as e:
             print("エラー : ",e)
         time.sleep(5)
+        
     print("total # of Rooms: " + str(len(RoomDetails)))
     return RoomDetails
 
@@ -144,12 +159,6 @@ def Parsedistrict(PageFullURLs, RoomDetails):
 BaseURLs = [
     #東京都
     "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=13",
-    #神奈川県
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=14",
-    #千葉県
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=12",
-    #埼玉県
-    "https://suumo.jp/jj/chintai/ichiran/FR301FC001/?url=%2Fchintai%2Fichiran%2FFR301FC001%2F&ar=030&bs=040&pc=30&smk=&po1=25&po2=99&co=1&kz=1&kz=2&kz=4&tc=0400101&tc=0400501&tc=0400301&shkr1=03&shkr2=03&shkr3=03&shkr4=03&cb=0.0&ct=12.0&et=15&mb=0&mt=9999999&cn=15&ta=11"
 ]
 
 
@@ -166,18 +175,52 @@ HeaderNames.extend(["マンション名", "住所", "最寄り駅", "築年数",
 HeaderNames = [temp.replace("\xa0", str(i)) for i, temp in enumerate(HeaderNames)] #空白の場合行番号で置き換え
 
 
+# Additional headers for the split columns
+additional_headers = ["敷金", "礼金", "間取り", "専有面積"]
+HeaderNames.remove("敷金/礼金")
+HeaderNames.remove("間取り/専有面積")
+HeaderNames.extend(["敷金", "礼金", "間取り", "専有面積"])
+
 # In[7]:
 
 
 #Scraping Main
 # RoomDetails = []　　#BaseURLsのデータをまとまりで出したい場合
 for iMcount, url in enumerate(BaseURLs):
+
+
     print("District Status: " + str(iMcount + 1) + "/" + str(len(BaseURLs)))
     All_PageFullURLs = []
 #     All_PageFullURLs = Recursive_PageNum(All_PageFullURLs, url) #全てのページのURLを取得
     All_PageFullURLs = PageNum_Easy(url)
     RoomDetails = [] #データをBaseURLsごと出力
     RoomDetails = Parsedistrict(All_PageFullURLs, RoomDetails) #ページごとの物件情報取得 / Pageのループはこの中
+
+    # Splitting the columns
+    for room in RoomDetails:
+        # 敷金/礼金の分割
+        shikikin_reikin = room[4]
+        shikikin = '-'
+        reikin = '-'
+        if '万円' in shikikin_reikin:
+            shikikin, reikin = shikikin_reikin.split('万円', 1)            
+            reikin = reikin.strip()
+        
+        # 間取り/専有面積の分割
+        madori_menseki = room[5]
+        for madori in ["1R", "1K", "1DK", "1LDK", "2K", "2DK", "2LDK", "3K", "3DK", "3LDK", "4K", "4DK", "4LDK"]:
+            if madori in madori_menseki:
+                madori_value = madori
+                menseki_value = madori_menseki.replace(madori, "").strip()
+                break
+        
+        room.remove(room[5])
+        room.remove(room[4])
+
+        room.extend([shikikin,reikin,madori_value,menseki_value])
+
+
     df = pd.DataFrame(RoomDetails, columns = HeaderNames)
     filename = "SUMMO_FullRoom_" + str(iMcount) + ".csv"
     df.to_csv(filename)
+
